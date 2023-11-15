@@ -19,9 +19,9 @@
 	.param .u64 kernel_bank_conflict_param_2
 )
 {
-	.reg .f32 	%f<4>;
+	.reg .f32 	%f<2>;
 	.reg .b32 	%r<89>;
-	.reg .b64 	%rd<14>;
+	.reg .b64 	%rd<13>;
 	// demoted variable
 	.shared .align 4 .b8 _ZZ20kernel_bank_conflictE10share_data[16384];
 
@@ -31,8 +31,7 @@
 	cvta.to.global.u64 	%rd6, %rd4;
 	cvta.to.global.u64 	%rd7, %rd5;
 	cvta.to.global.u64 	%rd8, %rd3;
-	ld.global.f32 	%f1, [%rd8];
-	cvt.rzi.s32.f32 	%r1, %f1;
+	ld.global.u32 	%r1, [%rd8];
 	mov.u32 	%r2, %ctaid.x;
 	mov.u32 	%r3, %ntid.x;
 	mov.u32 	%r4, %tid.x;
@@ -126,15 +125,13 @@
 	// begin inline asm
 	mov.u64 	%rd2, %clock64;
 	// end inline asm
-	and.b64  	%rd9, %rd1, 4294967295;
-	sub.s64 	%rd10, %rd2, %rd9;
-	cvt.rn.f32.s64 	%f2, %rd10;
-	mul.wide.s32 	%rd11, %r5, 4;
-	add.s64 	%rd12, %rd7, %rd11;
-	cvt.rn.f32.u32 	%f3, %r88;
-	add.s64 	%rd13, %rd6, %rd11;
-	st.global.f32 	[%rd12], %f2;
-	st.global.f32 	[%rd13], %f3;
+	sub.s64 	%rd9, %rd2, %rd1;
+	mul.wide.s32 	%rd10, %r5, 4;
+	add.s64 	%rd11, %rd7, %rd10;
+	cvt.rn.f32.u32 	%f1, %r88;
+	add.s64 	%rd12, %rd6, %rd10;
+	st.global.u32 	[%rd11], %rd9;
+	st.global.f32 	[%rd12], %f1;
 	ret;
 
 }

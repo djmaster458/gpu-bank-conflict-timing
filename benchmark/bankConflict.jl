@@ -14,12 +14,12 @@ bank_conflict = CuFunction(md, "kernel_bank_conflict")
 nthreads = CUDA.warpsize(CUDA.device())
 nblocks = 1
 
-average_times_per_stride = zeros(Float32, 32)
+average_times_per_stride = zeros(Float32, nthreads)
 
-for i in 1:10_000
+for i in 1:1_000
     for j in 1:32
-        stride = Float32[j]
-        times = zeros(Float32, nthreads)
+        stride = Int32[j]
+        times = zeros(UInt32, nthreads)
         out = zeros(Float32, nthreads)
         
         d_stride = CuArray(stride)
@@ -27,7 +27,7 @@ for i in 1:10_000
         d_out = CuArray(out)
         
         CUDA.@sync begin
-            cudacall(bank_conflict, Tuple{CuPtr{Cint},CuPtr{Cfloat},CuPtr{Cfloat}}, d_stride, d_out, d_times; threads=nthreads, blocks=nblocks)
+            cudacall(bank_conflict, Tuple{CuPtr{Cint},CuPtr{Cfloat},CuPtr{Cuint}}, d_stride, d_out, d_times; threads=nthreads, blocks=nblocks)
         end
 
         out_times = Array(d_times)
@@ -37,8 +37,12 @@ end
 
 println("GPU Done")
 
-average_times_per_stride = average_times_per_stride ./ 10_000
+average_times_per_stride = average_times_per_stride ./ 1_000
 
 println(average_times_per_stride)
 
-histogram(average_times_per_stride, legend=false, xlabel="GPU Clock Cycles", ylabel="Frequency")
+# histogram(average_times_per_stride, legend=false, xlabel="GPU Clock Cycles", ylabel="Frequency")
+
+strides = range(1, 32)
+scatter(strides, average_times_per_stride, xlabel="Stride Value", ylabel="GPU Clock Cycles")
+

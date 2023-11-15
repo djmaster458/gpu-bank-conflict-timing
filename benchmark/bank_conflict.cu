@@ -1,12 +1,12 @@
 extern "C" {
 
 #include <stdint.h>
-__global__ void kernel_bank_conflict(const float *_stride, float *out, float *times)
+__global__ void kernel_bank_conflict(const int *_stride, float *out, uint32_t *times)
 {
     register uint32_t tmp, tmp2 = 0, offset = 32;
     __shared__ uint32_t share_data[1024*4];
 
-    const int stride = (int)_stride[0];
+    const int stride = _stride[0];
     
     int tid = blockIdx.x *blockDim.x + threadIdx.x;
     tmp = clock();
