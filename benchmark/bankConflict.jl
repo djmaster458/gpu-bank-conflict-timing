@@ -1,8 +1,7 @@
-using Test
-
 using CUDA
 using Plots
 using Statistics
+using PrettyTables
 
 println(CUDA.versioninfo())
 println("Blocks: 1")
@@ -41,8 +40,20 @@ average_times_per_stride = average_times_per_stride ./ 1_000
 
 println(average_times_per_stride)
 
+## Generate Frequency Counts
 # histogram(average_times_per_stride, legend=false, xlabel="GPU Clock Cycles", ylabel="Frequency")
 
-strides = range(1, 32)
-scatter(strides, average_times_per_stride, xlabel="Stride Value", ylabel="GPU Clock Cycles")
+## Generate Strides vs. GPU Clock Time
+# strides = range(1, 32)
+# scatter(strides, average_times_per_stride, xlabel="Stride Value", ylabel="GPU Clock Cycles")
+
+## Generate Pretty Table with times and strides
+
+strides = 1:1:32
+table_data = hcat(strides, average_times_per_stride)
+header = (["Stride", "GPU Clock Cycles"])
+pretty_table(
+    table_data;
+    header = header,
+    backend = Val(:latex))
 
