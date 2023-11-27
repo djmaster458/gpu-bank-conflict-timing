@@ -5,6 +5,7 @@ const BANKSIZE = 4;
 const NLOOKUPS = 4;
 const NTHREADS = 32;
 const NBLOCKS = 1;
+const NSAMPLES = 1_000_000;
 
 function GenerateInverseSbox(sbox)
     # Create an map to store the inverse S-box
@@ -152,9 +153,11 @@ SBOX_INV = GenerateInverseSbox(SBOX);
 # println(ConvertU32ToU8Array(0xb85742d0));
 
 # Generate test data
-test_data = rand(UInt32, 1_000);
+test_data = rand(UInt32, NSAMPLES);
 
-# Generate cipher texts and timing
+actual_key = 0x02358953; # looking pinpoint an individual byte
+
+# Generate cipher texts and timing data
 md = CuModuleFile(joinpath(@__DIR__, "sbox_encrypt.ptx"));
 sbox_encrypt = CuFunction(md, "kernel_sbox_encrypt");
 
@@ -169,4 +172,11 @@ for i in eachindex(test_data)
     end
 end
 
-# for each, calculate the correlation for the last key byte (i.e. 4)
+# Calculate the actual average time for encryption from sample data + actual key
+
+# For each cipher text collected, perform the following
+# 1. For each possible key byte for the target lookup operation
+# 2. Calculate the number of bank conflicts give that key byte guess for that instruction
+# 3. Using the linear relationship from the benchmarks for bank conflicts, convert number of predicted conflicts to GPU time
+# 4. Calculate the difference between the actual GPU time and predicted GPU time (difference of means)
+# 5. Plot results

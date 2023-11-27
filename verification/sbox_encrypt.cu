@@ -12,7 +12,7 @@ __global__ void kernel_sbox_encrypt(const uint32_t *plainTextBlocks, uint32_t *c
     
     // init shared memory since CUDA disallows static initialization of shared memory
     // using thread to copy SBOX passed in before starting timing
-    sbox[tid+stride*0] = _sbox[tid+stride*0]; // 0-31Cuint
+    sbox[tid+stride*0] = _sbox[tid+stride*0]; // 0-31
     sbox[tid+stride*1] = _sbox[tid+stride*1]; // 32-63
     sbox[tid+stride*2] = _sbox[tid+stride*2]; // 64-96 ... etc
     sbox[tid+stride*3] = _sbox[tid+stride*3];
