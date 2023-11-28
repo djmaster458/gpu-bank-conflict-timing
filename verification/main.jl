@@ -1,6 +1,8 @@
 using CUDA;
 using Statistics;
 using Plots;
+using GLM;
+using DataFrames;
 
 const NBANKS = 32;
 const BANKSIZE = 4;
@@ -13,9 +15,9 @@ function GenerateInverseSbox(sbox)
     # Create an map to store the inverse S-box
     is_box = Dict()
 
-    # Fill map in the inverse S-box values
+    # Fill map in the inverse S-box values for lookups of the last byte
     for (i, val) in enumerate(sbox)
-        is_box[val] = i
+        is_box[val & 0x000000FF] = i
     end
 
     return is_box
@@ -36,55 +38,52 @@ function CalculateBankIndex(array_index)
     return (array_index - 1) % NBANKS;
 end
 
-function DetermineLookupTableAccesses(ciphertexts_by_thread, invSbox, key)
+function DetermineLookupTableAccesses(single_warp_ciphertexts, invSbox, key)
     # lookup instructions and their bytes used in the table lookup
-    t1 = [];
-    t2 = [];
-    t3 = [];
-    t4 = [];
+    sbox_indices_lsb = [];
 
     # based on section 4.3's equation
-    for i in eachindex(ciphertexts_by_thread)
-        block = ciphertexts_by_thread[i];
-        block = block ⊻ key;
+    # we take each cipher text block, undo the key XOR, and use the inverse SBOX to find the index into SBOX
+    for i in eachindex(single_warp_ciphertexts)
+        block = single_warp_ciphertexts[i];
+        tmp = block ⊻ key;
 
-        lookup_block = InverseSboxLookup(invSbox, block);
-        lookup_bytes = ConvertU32ToU8Array(lookup_block);
+        # Note: This is based on system endianness (little => byte 1 is LSB)
+        inverse_lookup_bytes = ConvertU32ToU8Array(tmp);
 
-        # note: order matters based on endianness and order of lookups: t1 = first lookup = LSB
-        push!(t1, lookup_bytes[1]);
-        push!(t2, lookup_bytes[2]);
-        push!(t3, lookup_bytes[3]);
-        push!(t4, lookup_bytes[4]);
+        # gives SBOX index, used to determine the bank access here
+        b1 = invSbox[inverse_lookup_bytes[1]];
+
+        push!(sbox_indices_lsb, b1);
     end
 
-    return t1, t2, t3, t4;
+    # returns a list of array indices, used to determine number of bank conflict for predicted key
+    return sbox_indices_lsb;
 end
 
-function FindBankConflictsPerLookupInst(t1, t2, t3, t4)
-    # filter out to unique bytes, since bank conflicts will only occur from separate indices, different bank value
-    t1_filtered = unique(t1);
-    t2_filtered = unique(t2);
-    t3_filtered = unique(t3);
-    t4_filtered = unique(t4);
+function FindBankConflictsPerLookupInst(actual_ciphertexts_per_warp, key, invSbox)
+    bank_conflicts_per_warp = Vector{UInt8}();
 
-    # find bank indices
-    t1_banks = [CalculateBankIndex(i) for i in t1_filtered];
-    t2_banks = [CalculateBankIndex(i) for i in t2_filtered];
-    t3_banks = [CalculateBankIndex(i) for i in t3_filtered];
-    t4_banks = [CalculateBankIndex(i) for i in t4_filtered];
+    # For each data sample, find the lookup table accesses based on the given key, and number of bank conflicts for that warp
+    for i in eachindex(actual_ciphertexts_per_warp)
+        # Get the array indices for the warp for the LSB lookup
+        sbox_indices_lsb_warp = DetermineLookupTableAccesses(actual_ciphertexts_per_warp[i], invSbox, key);
 
-    # Find number of bank conflicts
-    t1_bcs = CalculateNumberOfDuplicates(t1_banks);
-    t2_bcs = CalculateNumberOfDuplicates(t2_banks);
-    t3_bcs = CalculateNumberOfDuplicates(t3_banks);
-    t4_bcs = CalculateNumberOfDuplicates(t4_banks);
+        # Only unique elements can cause bank conflicts (i.e. different data in banks)
+        unique!(sbox_indices_lsb_warp);
 
-    return t1_bcs, t2_bcs, t3_bcs, t4_bcs;
+        # Use equation to calculate bank indexes
+        bank_indices = [CalculateBankIndex(i) for i in sbox_indices_lsb_warp];
+        
+        # Find number of bank conflicts by counting duplicate bank indices (since they are accessing unique bank sections)
+        push!(bank_conflicts_per_warp, CalculateNumberOfDuplicates(bank_indices));
+    end
+
+    # return vector of bank conflicts for the data set given a key guess
+    return bank_conflicts_per_warp;
 end
 
 function GenerateDataSample(kernel, data_sample, d_key, d_sbox)
-
     # allocate CUDA Arrays
     d_plaintexts = CuArray(data_sample);
     d_ciphertexts = CUDA.zeros(UInt32, NTHREADS);
@@ -110,42 +109,35 @@ function ImportCudaKernel()
     return sbox_encrypt;
 end
 
-function CorrelationAttack(actual_timings, actual_cipher_blocks, invSbox)
-    correlations = [];
+function CorrelationAttack(actual_timings_per_warp, actual_ciphertexts_per_warp, invSbox)
+    correlation_per_key_guess = [];
+    r2_per_key_guess = [];
+    slopes_per_key_guess = [];
 
-    # for each possible key
+    # for each possible LSB key byte
     for key_guess in 1:255
         key_guess = UInt32(key_guess);
 
         # Calculate the number of bank conflicts for each lookup, we are only going to look at the LSB for now
         # Append that number to a vector, should have number == number of data samples
-        bank_conflicts_last_byte = [];
-        for j in 1:length(actual_timings)
-            t1, t2, t3, t4 = DetermineLookupTableAccesses(actual_cipher_blocks[j], invSbox, key_guess);
-            _,_,_,bc_4 = FindBankConflictsPerLookupInst(t1, t2, t3, t4);
-            append!(bank_conflicts, bc_4);
-        end
+        bank_conflicts_dataset = FindBankConflictsPerLookupInst(actual_ciphertexts_per_warp, key_guess, invSbox);
 
-        # Calculate linearity between the number of bank conflicts and actual timing
-        # store these and plot
-        cor_value = Statistics.cor(bank_conflicts_last_byte, actual_timings);
-        push!(correlations, cor_value);
+        # Use linear regression with x = number of predicted bank conflicts for that warp, y = actual warp timing
+        # Also record correlation value which gives idea of strength of linearity of the data
+        data = DataFrame(X=actual_timings_per_warp, Y=bank_conflicts_dataset);
+
+        model = lm(@formula(Y ~ X), data);
+
+        slope = coef(model)[2];
+        r_2 = r2(model);
+        push!(r2_per_key_guess, r_2);
+        push!(slopes_per_key_guess, slope);
+
+        cor_value = Statistics.cor(bank_conflicts_dataset, actual_timings_per_warp);
+        push!(correlation_per_key_guess, cor_value);
     end
 
-    return correlations;
-end
-
-function InverseSboxLookup(invSbox, block)
-    # bytes in little endianness
-    bytes = ConvertU32ToU8Array(block);
-    out_bytes = zeros(UInt8, 4);
-
-    out_bytes[0] = invSbox[bytes[1]] ⩓ 0x000000FF;
-    out_bytes[1] = invSbox[bytes[2]] ⩓ 0x0000FF00;
-    out_bytes[2] = invSbox[bytes[3]] ⩓ 0x00FF0000;
-    out_bytes[3] = invSbox[bytes[4]] ⩓ 0xFF000000;
-
-    return reinterpret(UInt32, out_bytes);
+    return slopes_per_key_guess, correlation_per_key_guess, r2_per_key_guess;
 end
 
 function main()
@@ -227,8 +219,8 @@ function main()
     
     kernel = ImportCudaKernel();
     
-    actual_timings = [];
-    actual_cipher_blocks = Vector{Vector{UInt32}}();
+    actual_timings_per_warp = Vector{UInt32}();
+    actual_ciphertexts_per_warp = Vector{Vector{UInt32}}();
     
     _, cols = size(test_data);
     println(cols);
@@ -240,27 +232,36 @@ function main()
         data_sample = test_data[:,col];
         runtime, ciphertext_array = GenerateDataSample(kernel, data_sample, d_key, d_sbox);
 
-        push!(actual_timings, runtime);
-        push!(actual_cipher_blocks, ciphertext_array);
+        push!(actual_timings_per_warp, runtime);
+        push!(actual_ciphertexts_per_warp, ciphertext_array);
     end
 
-    x = range(1, 255);
-    y = CorrelationAttack(actual_timings, actual_cipher_blocks, SBOX_INV);
+    # actual_timings_per_warp = array of times for each data sample
+    # actual_ciphertexts_per_warp = array of ciphertexts produced by each 32 thread sample
+    slopes_per_key_guess, cor_per_key_guess, r2_per_key_guess = CorrelationAttack(actual_timings_per_warp, actual_ciphertexts_per_warp, SBOX_INV);
 
-    plot(x, y);
-    xlabel!("Key Guess");
-    ylabel!("Linear Correlation");
-    title!("Linear Correlation Of Bank Conflicts vs. Timing Using Lookup Tables");
+    x_axis = range(1, 255);
 
+    plot(x_axis, slopes_per_key_guess, label="LR Slope");
+    xlabel!("Key Guess 1-255");
+    ylabel!("Linear Reg. Coeffcient");
+    title!("Linear Regression Slope vs. Key Guess");
+    savefig("linear_regression_slope.png");
+
+    plot(x_axis, cor_per_key_guess, label="Correlation Value");
+    xlabel!("Key Guess 1-255");
+    ylabel!("Pearson Correlation");
+    title!("Correlation vs. Key Guess");
+    savefig("pearson_correlation.png");
+
+    plot(x_axis, r2_per_key_guess, label="R^2");
+    xlabel!("Key Guess 1-255");
+    ylabel!("Linear Regression: R^2 Value");
+    title!("R-Squared vs. Key Guess");
+    savefig("r_squared.png");
 end
 
 main();
-
-# a = Vector{Vector{UInt32}}();
-# push!(a, UInt32[1,2,3]);
-# push!(a, UInt32[1,2,3]);
-# println(a);
-
 
 # Calculate the actual average time for encryption from sample data + actual key
 

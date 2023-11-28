@@ -3,7 +3,13 @@ extern "C" {
 #include <stdint.h>
 
 #define SBOXSIZE (256)
-__global__ void kernel_sbox_encrypt(const uint32_t *plainTextBlocks, uint32_t *cipherTextBlocks, const uint32_t *key, const uint32_t *_sbox, uint32_t *runtime)
+
+__global__ void kernel_sbox_encrypt(
+    const uint32_t *plainTextBlocks,
+    uint32_t *cipherTextBlocks,
+    const uint32_t *key,
+    const uint32_t *_sbox,
+    uint32_t *runtime)
 {
     __shared__ uint32_t sbox[SBOXSIZE];
     
@@ -24,12 +30,12 @@ __global__ void kernel_sbox_encrypt(const uint32_t *plainTextBlocks, uint32_t *c
     register uint32_t tmp = clock();
     
     // Perform sbox encryption for each plain text block
-    // Takes each byte and performs lookup to SBOX followed by XOR with key
+    // Take each byte of the plain text block as a lookup index to a 4-byte value, and take the respective byte of the value
     cipherTextBlocks[tid] = 
-    (sbox[(plainTextBlocks[tid] & 0x000000FF)]) ^
-    (sbox[(plainTextBlocks[tid] & 0x0000FF00) >> 8]) ^
-    (sbox[(plainTextBlocks[tid] & 0x00FF0000) >> 16]) ^
-    (sbox[(plainTextBlocks[tid] & 0xFF000000) >> 24]) ^
+    (sbox[(plainTextBlocks[tid] & 0x000000FF)]       & 0x000000FF) ^
+    (sbox[(plainTextBlocks[tid] & 0x0000FF00) >> 8]  & 0x0000FF00) ^
+    (sbox[(plainTextBlocks[tid] & 0x00FF0000) >> 16] & 0x00FF0000) ^
+    (sbox[(plainTextBlocks[tid] & 0xFF000000) >> 24] & 0xFF000000) ^
     key[0];
 
     __syncwarp();
