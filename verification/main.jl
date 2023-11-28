@@ -228,6 +228,7 @@ function main()
     d_key = CuArray([actual_key]);
     d_sbox = CuArray(SBOX);
 
+    # Generate Data Samples
     for col in 1:cols
         data_sample = test_data[:,col];
         runtime, ciphertext_array = GenerateDataSample(kernel, data_sample, d_key, d_sbox);
@@ -242,6 +243,7 @@ function main()
 
     x_axis = range(1, 255);
 
+    # Save plots
     plot(x_axis, slopes_per_key_guess, label="LR Slope");
     xlabel!("Key Guess 1-255");
     ylabel!("Linear Reg. Coeffcient");
@@ -262,12 +264,3 @@ function main()
 end
 
 main();
-
-# Calculate the actual average time for encryption from sample data + actual key
-
-# For each cipher text collected, perform the following
-# 1. For each possible key byte for the target lookup operation
-# 2. Calculate the number of bank conflicts give that key byte guess for that instruction
-# 3. Using the linear relationship from the benchmarks for bank conflicts, convert number of predicted conflicts to GPU time
-# 4. Calculate the difference between the actual GPU time and predicted GPU time (difference of means)
-# 5. Plot results
